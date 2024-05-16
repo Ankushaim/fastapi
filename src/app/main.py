@@ -1,31 +1,33 @@
+import time
 from typing import Optional
-from fastapi import FastAPI, Response, status, HTTPException
-from fastapi.params import Body
+
+import psycopg2
+from fastapi import FastAPI, status, HTTPException
+from psycopg2.extras import RealDictCursor
 from pydantic import BaseModel
-from random import randrange
 
 app = FastAPI()
+
+while True:
+    try:
+        conn = psycopg2.connect(host="localhost", database="fastApiLearning", user="postgres", password="root",
+                                cursor_factory=RealDictCursor)
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        print("Database connection established")
+        break
+    except Exception as e:
+        print("Failed to connect")
+        print(e)
+        time.sleep(2)
+
 
 class Post(BaseModel):
     title: str
     content: str
-    # defining two optional fields one with out using library and one using Optional from typing library
+    # optional fields below
     published: bool = True
     rating: Optional[int] = None
-    
 
-my_posts =[
-    {
-        "title": "title of post 1",
-        "content": "content of post 1",
-        "id": 1,
-    },
-    {
-        "title": "favourite foods",
-        "content": "I like pizza",
-        "id": 2,
-    }
-]
 
 @app.get("/")
 async def root():
@@ -34,74 +36,47 @@ async def root():
 
 @app.get("/posts")
 def get_posts():
-    return {"data": my_posts}
+    cursor.execute("SELECT * FROM post")
+    posts = cursor.fetchall()
+    return {"data": posts}
 
 
-# @app.post("/posts")
-# def create_post(payload: dict = Body(...)):
-# lets use Pydantic here. Arguments new_post is refrence and Post is model name
-
-
-# default status code of created post is 200 but as per defination it should be 201. To change default status code please follow below
-# @app.post("/posts")
-
-@app.post("/posts", status_code= status.HTTP_201_CREATED)
-def create_post(new_post: Post):
-    post_dict = new_post.model_dump()
-    post_dict["id"] = randrange(2, 1000000)
-    my_posts.append(post_dict)    
-    return {"data ": f"{post_dict}"}
-
-
-def find_post(id: int) -> dict:
-    for post in my_posts:
-        if post["id"] == id:
-            return post
+@app.post("/posts", status_code=status.HTTP_201_CREATED)
+def create_post(new_post: Post) -> dict[str, str]:
+    cursor.execute("""INSERT INTO post (title, content, published) VALUES (%s, %s, %s) RETURNING *""",
+                   (new_post.title, new_post.content, new_post.published))
+    new_created_post = cursor.fetchone()
+    conn.commit()
+    return {"data ": f"{new_created_post}"}
 
 
 @app.get("/posts/{id}")
-# def get_posts(id: int, response: Response):
 def get_posts(id: int):
-    post = find_post(id)
+    cursor.execute("""SELECT * FROM post WHERE id = %s """, (str(id),))
+    post = cursor.fetchone()
     if not post:
-        # response.status_code = status.HTTP_404_NOT_FOUND
-        # return {"message" : "Post with id {id} not found"}
-
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"message" : f"Post with id {id} not found"})
-    
-    return {"post_details": f"{post}"}
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"message": f"Post with id {id} not found"})
+    return {"post_details": post}
 
 
-def find_index_of_post(id: int) -> int:
-    print(id, type(id))
-    for index, post in enumerate(my_posts):
-        if post["id"] == id:
-            return index
-    return -1
-
-
-@app.delete("/posts/{id}", status_code= status.HTTP_204_NO_CONTENT)
+@app.delete("/posts/{id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_post(id: int):
-    post_index = find_index_of_post(id)
-    print("post Index:", post_index)
-    if post_index < 0:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail= {"message": f"No post can be found with this {id}. Please provide valid post id"})
-    else:
-        my_posts.pop(post_index)
+    cursor.execute("""DELETE FROM post WHERE id = %s RETURNING *""", (str(id),))
+    deleted_post = cursor.fetchone()
+    conn.commit()
+    if deleted_post is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail={"message": f"No post can be found with this {id}. Please provide valid post id"})
 
 
-
-@app.put("/posts/{id}", status_code= status.HTTP_202_ACCEPTED)
+@app.put("/posts/{id}", status_code=status.HTTP_202_ACCEPTED)
 def update_post(id: int, new_post: Post):
-    print(id)
-    post_index = find_index_of_post(id)
-
-    if post_index < 0:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail= {"message": f"No post can be found with this {id}. Please provide valid post id"})
+    cursor.execute(""" UPDATE post SET title = %s, content = %s, published = %s WHERE id = %s RETURNING *""",
+                   (new_post.title, new_post.content, new_post.published, str(id)))
+    updated_post = cursor.fetchone()
+    conn.commit()
+    if updated_post is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail={"message": f"No post can be found with this {id}. Please provide valid post id"})
     else:
-        new_post_dict = new_post.model_dump()
-        
-        new_post_dict["id"] = id
-        my_posts[post_index] = new_post_dict
-        return {"data": new_post_dict}
-        
+        return {"updated_post": updated_post}
