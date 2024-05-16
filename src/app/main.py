@@ -80,3 +80,5 @@ def update_post(id: int, new_post: Post):
                             detail={"message": f"No post can be found with this {id}. Please provide valid post id"})
     else:
         return {"updated_post": updated_post}
+
+# Test commit
